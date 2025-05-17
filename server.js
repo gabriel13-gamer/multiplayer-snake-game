@@ -14,34 +14,50 @@ const io = socketIo(server, {
     }
 });
 
+// Enable CORS
 app.use(cors());
-app.use(express.static(path.join(__dirname, '.')));
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Serve static files
+app.use(express.static(path.join(__dirname)));
+
+// Serve index.html for all routes to handle client-side routing
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
 
 // Store active players and their data
 const players = new Map();
 // Store leaderboard data
 let leaderboard = [];
 
+// Initialize leaderboard storage
+const LEADERBOARD_FILE = path.join(__dirname, 'leaderboard.json');
+
 // Load leaderboard from file if it exists
 try {
-    if (fs.existsSync('leaderboard.json')) {
-        const leaderboardData = fs.readFileSync('leaderboard.json', 'utf8');
+    if (fs.existsSync(LEADERBOARD_FILE)) {
+        const leaderboardData = fs.readFileSync(LEADERBOARD_FILE, 'utf8');
         leaderboard = JSON.parse(leaderboardData);
         console.log('Loaded existing leaderboard:', leaderboard);
     } else {
         console.log('No existing leaderboard found, starting fresh');
-        saveLeaderboard(); // Create the initial empty leaderboard file
+        // Create empty leaderboard file
+        fs.writeFileSync(LEADERBOARD_FILE, '[]', 'utf8');
     }
 } catch (error) {
     console.error('Error loading leaderboard:', error);
     leaderboard = [];
-    saveLeaderboard(); // Create a new leaderboard file
 }
 
 // Function to save leaderboard to file
 function saveLeaderboard() {
     try {
-        fs.writeFileSync('leaderboard.json', JSON.stringify(leaderboard, null, 2), 'utf8');
+        fs.writeFileSync(LEADERBOARD_FILE, JSON.stringify(leaderboard, null, 2), 'utf8');
         console.log('Leaderboard saved successfully');
     } catch (error) {
         console.error('Error saving leaderboard:', error);
