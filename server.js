@@ -23,19 +23,13 @@ app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Serve static files with correct MIME types
-app.get('/game.js', (req, res) => {
-    res.setHeader('Content-Type', 'application/javascript');
-    res.sendFile(path.join(__dirname, 'game.js'));
-});
+// Serve static files from public directory
+app.use(express.static(path.join(__dirname, 'public')));
 
-app.get('/socket.io/socket.io.js', (req, res) => {
-    res.setHeader('Content-Type', 'application/javascript');
-    res.sendFile(path.join(__dirname, 'node_modules/socket.io/client-dist/socket.io.js'));
+// Serve index.html for the root route and client-side routes
+app.get('/*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
-
-// Serve index.html and other static files
-app.use(express.static(path.join(__dirname)));
 
 // Store active players and their data
 const players = new Map();

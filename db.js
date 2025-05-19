@@ -1,62 +1,60 @@
-const { createClient } = require('@supabase/supabase-js');
-require('dotenv').config({ path: '.env.local' });
+const fs = require('fs').promises;
+const path = require('path');
 
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
-    console.error('Missing Supabase environment variables');
-    process.exit(1);
+const LEADERBOARD_FILE = path.join(__dirname, 'leaderboard.json');
+
+// Initialize leaderboard from file or create new one
+async function initLeaderboard() {
+    try {
+        const data = await fs.readFile(LEADERBOARD_FILE, 'utf8');
+        return new Map(Object.entries(JSON.parse(data)));
+    } catch (error) {
+        return new Map();
+    }
 }
 
-const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_ANON_KEY
-);
+// Save leaderboard to file
+async function saveLeaderboard(leaderboard) {
+    const data = Object.fromEntries(leaderboard);
+    await fs.writeFile(LEADERBOARD_FILE, JSON.stringify(data, null, 2));
+}
+
+// Initialize the leaderboard
+let inMemoryLeaderboard;
+(async () => {
+    inMemoryLeaderboard = await initLeaderboard();
+})();
 
 // Leaderboard functions
 const leaderboardFunctions = {
     // Get top 10 scores
     getLeaderboard: async () => {
-        const { data, error } = await supabase
-            .from('leaderboard')
-            .select('*')
-            .order('score', { ascending: false })
-            .limit(10);
-
-        if (error) throw error;
-        return data;
+        return Array.from(inMemoryLeaderboard.values())
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 10);
     },
 
     // Check if player name exists
     checkPlayerName: async (name) => {
-        const { data, error } = await supabase
-            .from('leaderboard')
-            .select('name')
-            .eq('name', name)
-            .single();
-
-        if (error && error.code !== 'PGNF') throw error;
-        return !!data;
+        // Only check for active players, allow reusing names
+        return false;
     },
 
     // Update or create player score
     upsertScore: async (name, score) => {
-        const { data, error } = await supabase
-            .from('leaderboard')
-            .upsert(
-                { 
-                    name, 
-                    score,
-                    last_updated: new Date().toISOString()
-                },
-                {
-                    onConflict: 'name',
-                    target: ['name'],
-                    // Only update if new score is higher
-                    returning: true
-                }
-            );
-
-        if (error) throw error;
-        return data;
+        const existingScore = inMemoryLeaderboard.get(name)?.score || 0;
+        // Always store the highest score achieved
+        if (score >= existingScore) {
+            const playerData = {
+                name,
+                score,
+                last_updated: new Date().toISOString()
+            };
+            inMemoryLeaderboard.set(name, playerData);
+            await saveLeaderboard(inMemoryLeaderboard);
+            return playerData;
+        }
+        return inMemoryLeaderboard.get(name);
     }
 };
 

@@ -8,12 +8,12 @@ class SnakeGame {
         // Socket.io connection
         this.socket = io();
         this.playerId = null;
-        this.playerName = '';
+        this.playerName = localStorage.getItem('playerName') || '';
         this.otherPlayers = new Map();
         
         // Game state
         this.level = 1;
-        this.score = 0;
+        this.score = parseInt(localStorage.getItem('lastScore')) || 0;
         this.gameOver = false;
         this.gameStarted = false;
         this.countdownValue = 3;
@@ -41,6 +41,11 @@ class SnakeGame {
         
         // Start button
         document.getElementById('startButton').addEventListener('click', () => this.validateAndJoin());
+
+        // Set player name in input if it exists
+        if (this.playerName) {
+            document.getElementById('playerName').value = this.playerName;
+        }
     }
 
     initializeSocket() {
@@ -103,6 +108,8 @@ class SnakeGame {
 
         this.socket.emit('checkName', name, (isAvailable) => {
             if (isAvailable) {
+                this.playerName = name;
+                localStorage.setItem('playerName', name);
                 this.socket.emit('initPlayer', name);
                 nameInput.disabled = true;
                 this.startCountdown();
@@ -270,6 +277,7 @@ class SnakeGame {
             this.score += 10 * this.level;
             this.foodEaten++;
             document.getElementById('score').textContent = this.score;
+            localStorage.setItem('lastScore', this.score.toString());
             
             // Update score on server
             this.socket.emit('updateScore', { score: this.score });
@@ -357,6 +365,9 @@ class SnakeGame {
         this.gameStarted = false;
         document.getElementById('startButton').style.display = 'block';
         document.getElementById('startButton').textContent = 'Play Again';
+        
+        // Store final score
+        localStorage.setItem('lastScore', this.score.toString());
         
         // Clear snake from other players' view
         this.socket.emit('update', {
