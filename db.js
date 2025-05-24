@@ -1,61 +1,219 @@
-const fs = require('fs').promises;
-const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
 
-const LEADERBOARD_FILE = path.join(__dirname, 'leaderboard.json');
+// Initialize Supabase client
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Initialize leaderboard from file or create new one
-async function initLeaderboard() {
+// Get player data
+async function getPlayerData(name) {
     try {
-        const data = await fs.readFile(LEADERBOARD_FILE, 'utf8');
-        return new Map(Object.entries(JSON.parse(data)));
-    } catch (error) {
-        return new Map();
-    }
-}
+        const { data: player, error } = await supabase
+            .from('players')
+            .select('*')
+            .eq('name', name)
+            .single();
 
-// Save leaderboard to file
-async function saveLeaderboard(leaderboard) {
-    const data = Object.fromEntries(leaderboard);
-    await fs.writeFile(LEADERBOARD_FILE, JSON.stringify(data, null, 2));
-}
+        if (error) throw error;
 
-// Initialize the leaderboard
-let inMemoryLeaderboard;
-(async () => {
-    inMemoryLeaderboard = await initLeaderboard();
-})();
+        if (!player) {
+            // Create new player if doesn't exist
+            const { data: newPlayer, error: insertError } = await supabase
+                .from('players')
+                .insert([
+                    {
+                        name,
+                        coins: 50,
+                        games_played: 0,
+                        owned_skins: [],
+                        completed_tasks: []
+                    }
+                ])
+                .select()
+                .single();
 
-// Leaderboard functions
-const leaderboardFunctions = {
-    // Get top 10 scores
-    getLeaderboard: async () => {
-        return Array.from(inMemoryLeaderboard.values())
-            .sort((a, b) => b.score - a.score)
-            .slice(0, 10);
-    },
+            if (insertError) throw insertError;
 
-    // Check if player name exists
-    checkPlayerName: async (name) => {
-        // Only check for active players, allow reusing names
-        return false;
-    },
-
-    // Update or create player score
-    upsertScore: async (name, score) => {
-        const existingScore = inMemoryLeaderboard.get(name)?.score || 0;
-        // Always store the highest score achieved
-        if (score >= existingScore) {
-            const playerData = {
-                name,
-                score,
-                last_updated: new Date().toISOString()
+            return {
+                name: newPlayer.name,
+                coins: newPlayer.coins,
+                gamesPlayed: newPlayer.games_played,
+                ownedSkins: newPlayer.owned_skins,
+                completedTasks: newPlayer.completed_tasks
             };
-            inMemoryLeaderboard.set(name, playerData);
-            await saveLeaderboard(inMemoryLeaderboard);
-            return playerData;
         }
-        return inMemoryLeaderboard.get(name);
-    }
-};
 
-module.exports = leaderboardFunctions; 
+        // If player exists but has less than 50 coins, update to 50
+        if (player.coins < 50) {
+            const { data: updatedPlayer, error: updateError } = await supabase
+                .from('players')
+                .update({ coins: 50 })
+                .eq('name', name)
+                .select()
+                .single();
+
+            if (updateError) throw updateError;
+
+            return {
+                name: updatedPlayer.name,
+                coins: updatedPlayer.coins,
+                gamesPlayed: updatedPlayer.games_played,
+                ownedSkins: updatedPlayer.owned_skins,
+                completedTasks: updatedPlayer.completed_tasks
+            };
+        }
+
+        return {
+            name: player.name,
+            coins: player.coins,
+            gamesPlayed: player.games_played,
+            ownedSkins: player.owned_skins,
+            completedTasks: player.completed_tasks
+        };
+    } catch (error) {
+        console.error('Error in getPlayerData:', error);
+        throw error;
+    }
+}
+
+// Update player score
+async function upsertScore(name, score) {
+    try {
+        // Insert new score
+        const { error: scoreError } = await supabase
+            .from('scores')
+            .insert([
+                {
+                    player_name: name,
+                    score: score
+                }
+            ]);
+
+        if (scoreError) throw scoreError;
+
+        // Increment games played
+        const { error: updateError } = await supabase
+            .from('players')
+            .update({ games_played: supabase.rpc('increment_games_played') })
+            .eq('name', name);
+
+        if (updateError) throw updateError;
+
+        // Get updated player data
+        return await getPlayerData(name);
+    } catch (error) {
+        console.error('Error in upsertScore:', error);
+        throw error;
+    }
+}
+
+// Get leaderboard
+async function getLeaderboard() {
+    try {
+        const { data, error } = await supabase
+            .from('scores')
+            .select(`
+                player_name,
+                score,
+                timestamp,
+                players (
+                    coins,
+                    games_played,
+                    owned_skins,
+                    completed_tasks
+                )
+            `)
+            .order('score', { ascending: false });
+
+        if (error) throw error;
+
+        return data.map(row => ({
+            name: row.player_name,
+            score: row.score,
+            timestamp: row.timestamp,
+            coins: row.players.coins,
+            gamesPlayed: row.players.games_played,
+            ownedSkins: row.players.owned_skins,
+            completedTasks: row.players.completed_tasks
+        }));
+    } catch (error) {
+        console.error('Error in getLeaderboard:', error);
+        throw error;
+    }
+}
+
+// Add coins to player
+async function addCoins(name, amount) {
+    try {
+        const { error } = await supabase
+            .from('players')
+            .update({ coins: supabase.rpc('increment_coins', { amount }) })
+            .eq('name', name);
+
+        if (error) throw error;
+    } catch (error) {
+        console.error('Error in addCoins:', error);
+        throw error;
+    }
+}
+
+// Complete task
+async function completeTask(name, taskId) {
+    try {
+        const { data: player, error: fetchError } = await supabase
+            .from('players')
+            .select('completed_tasks')
+            .eq('name', name)
+            .single();
+
+        if (fetchError) throw fetchError;
+
+        const completedTasks = player.completed_tasks || [];
+        if (!completedTasks.includes(taskId)) {
+            const { error: updateError } = await supabase
+                .from('players')
+                .update({ completed_tasks: [...completedTasks, taskId] })
+                .eq('name', name);
+
+            if (updateError) throw updateError;
+        }
+    } catch (error) {
+        console.error('Error in completeTask:', error);
+        throw error;
+    }
+}
+
+// Purchase skin
+async function purchaseSkin(name, skinId) {
+    try {
+        const { data: player, error: fetchError } = await supabase
+            .from('players')
+            .select('owned_skins')
+            .eq('name', name)
+            .single();
+
+        if (fetchError) throw fetchError;
+
+        const ownedSkins = player.owned_skins || [];
+        if (!ownedSkins.includes(skinId)) {
+            const { error: updateError } = await supabase
+                .from('players')
+                .update({ owned_skins: [...ownedSkins, skinId] })
+                .eq('name', name);
+
+            if (updateError) throw updateError;
+        }
+    } catch (error) {
+        console.error('Error in purchaseSkin:', error);
+        throw error;
+    }
+}
+
+module.exports = {
+    getPlayerData,
+    upsertScore,
+    getLeaderboard,
+    addCoins,
+    completeTask,
+    purchaseSkin
+}; 
